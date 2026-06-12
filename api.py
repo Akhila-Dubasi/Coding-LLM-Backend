@@ -99,13 +99,129 @@ except Exception as e:
     raise
 
 
+from datetime import datetime
+
 class Question(BaseModel):
     prompt: str
+    conversation_id: str = None
+
+class ConversationCreate(BaseModel):
+    title: str = "New Chat"
+
+
+@app.post("/conversations")
+def create_conversation(data: ConversationCreate, payload: dict = Depends(verify_token)):
+    """Creates a new conversation session for the user."""
+    user_id = payload.get("sub")
+    if not supabase_client:
+        raise HTTPException(status_code=500, detail="Database client not initialized")
+    try:
+        response = supabase_client.table("conversations").insert({
+            "user_id": user_id,
+            "title": data.title
+        }).execute()
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create conversation")
+        return response.data[0]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/conversations")
+def get_conversations(search: str = None, payload: dict = Depends(verify_token)):
+    """Retrieves all chat conversations for the logged in user, optional search filtering."""
+    user_id = payload.get("sub")
+    if not supabase_client:
+        raise HTTPException(status_code=500, detail="Database client not initialized")
+    try:
+        query = supabase_client.table("conversations").select("*").eq("user_id", user_id)
+        if search:
+            query = query.ilike("title", f"%{search}%")
+        response = query.order("updated_at", desc=True).execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/conversations/{id}")
+def delete_conversation(id: str, payload: dict = Depends(verify_token)):
+    """Deletes a conversation and cascades to delete all related messages."""
+    user_id = payload.get("sub")
+    if not supabase_client:
+        raise HTTPException(status_code=500, detail="Database client not initialized")
+    try:
+        # Check ownership
+        check = supabase_client.table("conversations").select("id").eq("id", id).eq("user_id", user_id).execute()
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Conversation not found or unauthorized")
+        
+        supabase_client.table("conversations").delete().eq("id", id).execute()
+        return {"status": "success", "message": "Conversation deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/conversations/{id}/messages")
+def get_messages(id: str, payload: dict = Depends(verify_token)):
+    """Fetches all messages for a specific conversation session."""
+    user_id = payload.get("sub")
+    if not supabase_client:
+        raise HTTPException(status_code=500, detail="Database client not initialized")
+    try:
+        # Check ownership
+        check = supabase_client.table("conversations").select("id").eq("id", id).eq("user_id", user_id).execute()
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Conversation not found or unauthorized")
+        
+        response = supabase_client.table("messages").select("*").eq("conversation_id", id).order("created_at", desc=False).execute()
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/ask")
 def ask_ai(data: Question, payload: dict = Depends(verify_token)):
+    """Handles prompt query, logs history to database, and runs LLM generation."""
+    user_id = payload.get("sub")
+    if not supabase_client:
+        raise HTTPException(status_code=500, detail="Database client not initialized")
+    
+    conversation_id = data.conversation_id
 
+    # 1. Create a new conversation if conversation_id was not provided
+    if not conversation_id:
+        try:
+            # Set the title to the first few characters of prompt
+            title = data.prompt[:40] + "..." if len(data.prompt) > 40 else data.prompt
+            conv_response = supabase_client.table("conversations").insert({
+                "user_id": user_id,
+                "title": title
+            }).execute()
+            if not conv_response.data:
+                raise HTTPException(status_code=500, detail="Failed to create new conversation session")
+            conversation_id = conv_response.data[0]["id"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error creating conversation: {str(e)}")
+    else:
+        # Verify ownership of existing conversation
+        try:
+            check = supabase_client.table("conversations").select("id").eq("id", conversation_id).eq("user_id", user_id).execute()
+            if not check.data:
+                raise HTTPException(status_code=404, detail="Conversation not found or unauthorized")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # 2. Save the user's question to messages
+    try:
+        supabase_client.table("messages").insert({
+            "conversation_id": conversation_id,
+            "sender": "user",
+            "content": data.prompt
+        }).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save user message: {str(e)}")
+
+    # 3. Model generation
     text = f"""
 You are a professional coding assistant.
 Give clear and correct coding answers.
@@ -114,9 +230,7 @@ Instruction: {data.prompt}
 
 Answer:
 """
-
     inputs = tokenizer(text, return_tensors="pt")
-
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -132,7 +246,24 @@ Answer:
     result = tokenizer.decode(outputs[0], skip_special_tokens=True)
     answer = result.replace(text, "").strip()
 
-    return {"response": answer}
+    # 4. Save the AI's response to messages and update conversation timestamp
+    try:
+        supabase_client.table("messages").insert({
+            "conversation_id": conversation_id,
+            "sender": "ai",
+            "content": answer
+        }).execute()
+
+        supabase_client.table("conversations").update({
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq("id", conversation_id).execute()
+    except Exception as e:
+        print(f"Error saving AI message or updating timestamp: {e}")
+
+    return {
+        "response": answer,
+        "conversation_id": conversation_id
+    }
 
 
 @app.get("/admin/status")
