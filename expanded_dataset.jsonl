@@ -1,0 +1,7 @@
+{"instruction": "Write Python program for factorial", "input": "", "output": "def factorial(n):\n    if n == 0:\n        return 1\n    return n * factorial(n-1)\n\nprint(factorial(5))"}
+{"instruction": "Create factorial program in Python", "input": "", "output": "def factorial(n):\n    if n == 0:\n        return 1\n    return n * factorial(n-1)\n\nprint(factorial(5))"}
+{"instruction": "Find factorial using loop in Python", "input": "", "output": "def factorial(n):\n    if n == 0:\n        return 1\n    return n * factorial(n-1)\n\nprint(factorial(5))"}
+{"instruction": "Factorial using recursion in Python", "input": "", "output": "def factorial(n):\n    if n == 0:\n        return 1\n    return n * factorial(n-1)\n\nprint(factorial(5))"}
+{"instruction": "Write Python palindrome program", "input": "", "output": "text = \"madam\"\nprint(text == text[::-1])"}
+{"instruction": "Check palindrome in Python", "input": "", "output": "text = \"madam\"\nprint(text == text[::-1])"}
+{"instruction": "Python string palindrome example", "input": "", "output": "text = \"madam\"\nprint(text == text[::-1])"}
