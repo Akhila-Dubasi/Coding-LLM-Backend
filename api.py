@@ -45,7 +45,8 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
             token,
             SUPABASE_JWT_SECRET,
             algorithms=[ALGORITHM],
-            audience="authenticated"
+            audience="authenticated",
+            leeway=120
         )
         return payload
     except jwt.ExpiredSignatureError:
@@ -73,6 +74,7 @@ def ensure_profile_exists(payload: dict):
                 "role": role
             }).execute()
     except Exception as e:
+        import traceback; traceback.print_exc()
         print(f"Error auto-syncing user profile: {e}")
 
 def get_user_role(payload: dict = Depends(verify_token)) -> str:
@@ -87,6 +89,7 @@ def get_user_role(payload: dict = Depends(verify_token)) -> str:
             raise HTTPException(status_code=404, detail="User profile not found")
         return response.data[0]["role"]
     except Exception as e:
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Database query error: {str(e)}")
 
 def require_admin(role: str = Depends(get_user_role)):
@@ -231,6 +234,7 @@ def ask_ai(data: Question, payload: dict = Depends(verify_token)):
                 raise HTTPException(status_code=500, detail="Failed to create new conversation session")
             conversation_id = conv_response.data[0]["id"]
         except Exception as e:
+            import traceback; traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Error creating conversation: {str(e)}")
     else:
         # Verify ownership of existing conversation
@@ -239,6 +243,7 @@ def ask_ai(data: Question, payload: dict = Depends(verify_token)):
             if not check.data:
                 raise HTTPException(status_code=404, detail="Conversation not found or unauthorized")
         except Exception as e:
+            import traceback; traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
 
     # 2. Save the user's question to messages
@@ -249,6 +254,7 @@ def ask_ai(data: Question, payload: dict = Depends(verify_token)):
             "content": data.prompt
         }).execute()
     except Exception as e:
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to save user message: {str(e)}")
 
     # 3. Model generation
