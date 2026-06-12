@@ -53,8 +53,31 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Security(security))
     except jwt.InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
+def ensure_profile_exists(payload: dict):
+    """Ensures that a profile row exists in public.profiles. Auto-creates it from JWT payload if missing."""
+    user_id = payload.get("sub")
+    email = payload.get("email", "")
+    if not supabase_client:
+        return
+    try:
+        response = supabase_client.table("profiles").select("role").eq("id", user_id).execute()
+        if not response.data:
+            # Profile row is missing. Auto-create it using metadata role
+            metadata = payload.get("user_metadata", {}) or {}
+            role = metadata.get("role", "student")
+            if role not in ["student", "admin"]:
+                role = "student"
+            supabase_client.table("profiles").insert({
+                "id": user_id,
+                "email": email,
+                "role": role
+            }).execute()
+    except Exception as e:
+        print(f"Error auto-syncing user profile: {e}")
+
 def get_user_role(payload: dict = Depends(verify_token)) -> str:
     """Fetches user role from public.profiles table."""
+    ensure_profile_exists(payload)
     user_id = payload.get("sub")
     if not supabase_client:
         raise HTTPException(status_code=500, detail="Database client not initialized")
@@ -101,9 +124,11 @@ except Exception as e:
 
 from datetime import datetime
 
+from typing import Optional
+
 class Question(BaseModel):
     prompt: str
-    conversation_id: str = None
+    conversation_id: Optional[str] = None
 
 class ConversationCreate(BaseModel):
     title: str = "New Chat"
@@ -112,6 +137,7 @@ class ConversationCreate(BaseModel):
 @app.post("/conversations")
 def create_conversation(data: ConversationCreate, payload: dict = Depends(verify_token)):
     """Creates a new conversation session for the user."""
+    ensure_profile_exists(payload)
     user_id = payload.get("sub")
     if not supabase_client:
         raise HTTPException(status_code=500, detail="Database client not initialized")
@@ -130,6 +156,7 @@ def create_conversation(data: ConversationCreate, payload: dict = Depends(verify
 @app.get("/conversations")
 def get_conversations(search: str = None, payload: dict = Depends(verify_token)):
     """Retrieves all chat conversations for the logged in user, optional search filtering."""
+    ensure_profile_exists(payload)
     user_id = payload.get("sub")
     if not supabase_client:
         raise HTTPException(status_code=500, detail="Database client not initialized")
@@ -146,6 +173,7 @@ def get_conversations(search: str = None, payload: dict = Depends(verify_token))
 @app.delete("/conversations/{id}")
 def delete_conversation(id: str, payload: dict = Depends(verify_token)):
     """Deletes a conversation and cascades to delete all related messages."""
+    ensure_profile_exists(payload)
     user_id = payload.get("sub")
     if not supabase_client:
         raise HTTPException(status_code=500, detail="Database client not initialized")
@@ -164,6 +192,7 @@ def delete_conversation(id: str, payload: dict = Depends(verify_token)):
 @app.get("/conversations/{id}/messages")
 def get_messages(id: str, payload: dict = Depends(verify_token)):
     """Fetches all messages for a specific conversation session."""
+    ensure_profile_exists(payload)
     user_id = payload.get("sub")
     if not supabase_client:
         raise HTTPException(status_code=500, detail="Database client not initialized")
@@ -182,6 +211,7 @@ def get_messages(id: str, payload: dict = Depends(verify_token)):
 @app.post("/ask")
 def ask_ai(data: Question, payload: dict = Depends(verify_token)):
     """Handles prompt query, logs history to database, and runs LLM generation."""
+    ensure_profile_exists(payload)
     user_id = payload.get("sub")
     if not supabase_client:
         raise HTTPException(status_code=500, detail="Database client not initialized")
